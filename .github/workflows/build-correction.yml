@@ -1,0 +1,62 @@
+name: Build Spotify audio-ad correction
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      THEOS_PACKAGE_SCHEME: rootless
+      SWIFTPROTOBUF_VERSION: '1.29.0'
+      REPO_SLUG: SideloadLabs/EeveeSpotifyReincarnated
+      BRANCH_NAME: Master
+    steps:
+      - name: Check out exact upstream correction
+        uses: actions/checkout@v4
+        with:
+          repository: SideloadLabs/EeveeSpotifyReincarnated
+          ref: 1e637dc24c5b4e3d67df0bc443148f75ec2d56fe
+          submodules: recursive
+      - name: Set up Apple tools
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Set up Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+      - name: Install build tools
+        run: |
+          brew install make dpkg ldid
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> "$GITHUB_ENV"
+      - name: Build framework
+        run: make build-eeveeswiftprotobuf
+      - name: Check correction source
+        run: |
+          swiftc Tests/HookSourceAudit/main.swift -o "$RUNNER_TEMP/hook-audit"
+          "$RUNNER_TEMP/hook-audit"
+          swiftc Sources/EeveeSpotify/Shared/Models/Extensions/URL+Extension.swift Tests/URLAdClassification/main.swift -o "$RUNNER_TEMP/url-tests"
+          "$RUNNER_TEMP/url-tests"
+      - name: Compile corrected component
+        run: make all FINALPACKAGE=1
+      - name: Collect component and framework
+        run: |
+          mkdir -p Correction
+          DYLIB="$(find .theos/obj -type f -name EeveeSpotify.dylib | head -n 1)"
+          test -n "$DYLIB"
+          cp "$DYLIB" Correction/EeveeSpotify.dylib
+          cp -R "$THEOS/lib/iphone/rootless/EeveeSwiftProtobuf.framework" Correction/
+          printf '%s\n' 'Upstream source: 1e637dc24c5b4e3d67df0bc443148f75ec2d56fe' > Correction/SOURCE.txt
+          shasum -a 256 Correction/EeveeSpotify.dylib > Correction/SHA256.txt
+      - name: Save build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spotify-audio-ad-correction
+          path: Correction/
+          retention-days: 7
+          if-no-files-found: error
